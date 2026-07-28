@@ -15,21 +15,21 @@ print(t_test.shape)
 class LeNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1=nn.Conv2d(3,6,kernel_size=5)
-        self.pool=nn.AvgPool2d(kernel_size=2,stride=2)
-        self.conv2=nn.Conv2d(6,16,kernel_size=5)
-        self.conv3 = nn.Conv2d(16, 120, kernel_size=5)
+        self.conv1=nn.Conv2d(3,32,kernel_size=5)
+        self.pool=nn.MaxPool2d(kernel_size=2,stride=2)
+        self.conv2=nn.Conv2d(32,64,kernel_size=5)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=5)
 
-        self.fc1=nn.Linear(120,84)
-        self.fc2=nn.Linear(84,10)
+        self.fc1=nn.Linear(128,256)
+        self.fc2=nn.Linear(256,10)
 
     def forward(self,x):
-        x=self.pool(torch.tanh_(self.conv1(x)))
-        x=self.pool(torch.tanh_(self.conv2(x)))
+        x=self.pool(torch.relu(self.conv1(x)))
+        x=self.pool(torch.relu(self.conv2(x)))
         x=self.conv3(x)
         x=x.view(x.size(0),-1)
         x=self.fc1(x)
-        x=torch.tanh_(x)
+        x=torch.relu(x)
         x=self.fc2(x)
         return x
 
@@ -87,7 +87,7 @@ def visualize(model, x_data, t_data, num_img=10):
             img = x_sample[i].permute(1,2,0)
             img=img/255.0
             plt.imshow(img)
-            plt.title(f"True:{classes[t_sample[i].item()]},predicted:{classes[predicted[i].item()]}")
+            plt.title(f"True:{classes[t_sample[i].item()]}\npredicted:{classes[predicted[i].item()]}")
             plt.axis('off')
 
         plt.show()
