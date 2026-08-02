@@ -1,15 +1,30 @@
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader
+from torchvision.datasets import CIFAR10
+from torchvision import transforms
+import numpy
 #读取数据
-import sys,os
-sys.path.append(os.pardir)
-from cifar10 import load_cifar10
-(x_train,t_train),(x_test,t_test)=load_cifar10(flatten=False,normalize=False)
-print(x_train.shape)
-print(t_train.shape)
-print(x_test.shape)
-print(t_test.shape)
+transform_train = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomCrop(32, padding=4),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
+])
+
+train_dataset = CIFAR10(root='D:\\PythonProject2', train=True, download=False, transform=transform_train)
+test_dataset = CIFAR10(root='D:\\PythonProject2', train=False, download=False, transform=transform_test)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=0)
 
 #定义网络
 class ResidualBlock(nn.Module):
@@ -43,91 +58,108 @@ class plusCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1=nn.Conv2d(3,32,kernel_size=3,padding=1)
-        self.bn1=ResidualBlock(32,64,128,stride=1)
-        self.bn2=ResidualBlock(128,256,512,stride=1)
+        self.bn1=ResidualBlock(32,64,64,stride=1)
+        self.bn2=ResidualBlock(64,128,128,stride=1)
+        self.bn3=ResidualBlock(128,256,256,stride=2)
         self.pool=nn.MaxPool2d(2)
-        self.fc=nn.Linear(512*4*4,10)
+        self.dropout1=nn.Dropout(0.5)
+        self.fc1=nn.Linear(256*4*4,256)
+        self.fc2=nn.Linear(256,10)
 
     def forward(self,x):
         x=self.pool(torch.relu(self.conv1(x)))
         x=self.pool(self.bn1(x))
-        x=self.pool(self.bn2(x))
+        x=self.bn2(x)
+        x=self.bn3(x)
         x=x.view(x.size(0),-1)
-        x=self.fc(x)
+        x=torch.relu(self.fc1(x))
+        x=self.dropout1(x)
+        x=self.fc2(x)
         return x
 
 model=plusCNN()
 criterions=nn.CrossEntropyLoss()
-optimizers=torch.optim.Adam(model.parameters(),lr=0.001)
+optimizers=torch.optim.Adam(model.parameters(),lr=0.001,weight_decay=5e-4)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizers, T_max=20)
 
 #训练
 train_losses=[]
+train_accs=[]
 test_accs=[]
 epochs=10
-batch_sizes=100
-x_train_c=torch.from_numpy(x_train).float().permute(0,3,1,2)
-t_train_c=torch.from_numpy(t_train).long()
-x_test_c=torch.from_numpy(x_test).float().permute(0, 3, 1, 2)
-t_test_c=torch.from_numpy(t_test).long()
 for epoch in range(10):
-    indices=torch.randperm(x_train_c.size(0))
-    x_train_s=x_train_c[indices]
-    t_train_s=t_train_c[indices]
     total_losses=0
-    for i in range(0,len(x_train_c),batch_sizes):
-        x_bat=x_train_s[i:i+batch_sizes]
-        t_bat=t_train_s[i:i+batch_sizes]
+    for images,labels in train_loader:
+        y=model(images)
+        loss=criterions(y,labels)
 
-        y_bat=model(x_bat)
-        loss=criterions(y_bat,t_bat)
         optimizers.zero_grad()
         loss.backward()
         optimizers.step()
 
         total_losses+=loss.item()
 
-    avg_losses=total_losses/(len(x_train_c)//batch_sizes)
+    avg_losses=total_losses/len(train_loader)
     train_losses.append(avg_losses)
-    print(f"Epoch{epoch+1}/{epochs},loss:{avg_losses:.4f}")
+    print(f"Epoch{epoch+1}/{epochs}\nloss:{avg_losses:.4f}")
 
 #评估
     model.eval()
+    total=0
+    acc=0
     with torch.no_grad():
-        y_test_predicted=model(x_test_c)
-        test_acc=(y_test_predicted.argmax(1)==t_test_c).float().mean().item()
+        for images, labels in test_loader:
+            y_test = model(images)
+            _,pred=torch.max(y_test,1)
+            total+=labels.size(0)
+            acc+=(pred==labels).sum().item()
+        test_acc=acc/total
+        scheduler.step()
         print(f"Test Accuracy:{test_acc:.4f}")
-    test_accs.append(test_acc)
+        test_accs.append(test_acc)
+
+        train_images, train_labels = next(iter(train_loader))
+        train_pred = model(train_images)
+        train_acc = (train_pred.argmax(1) == train_labels).float().mean().item()
+        print(f"Train Accuracy:{train_acc:.4f}")
+        train_accs.append(train_acc)
+    model.train()
 
 plt.plot(train_losses)
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.title('Train Loss')
 plt.show()
-plt.plot(test_accs)
+plt.plot(test_accs,label='Test Accuracy')
+plt.plot(train_accs,label='Train Accuracy')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
-plt.title('Test Accuracy')
 plt.show()
 
 classes=('airplane','automobile','bird','cat','deer','dog','frog','horse','ship','truck')
-def visualize(model, x_data, t_data, num_img=10):
+def visualize(model, test_loader, num_img=10):
     model.eval()
     with torch.no_grad():
-        total = len(x_data)
-        indices = torch.randperm(total)[:num_img]
-        x_sample = x_data[indices]
-        t_sample = t_data[indices]
-        y_pred = model(x_sample)
+        images, labels = next(iter(test_loader))  # 取第一批
+        images = images[:num_img]
+        labels = labels[:num_img]
+        y_pred = model(images)
         _, predicted = torch.max(y_pred, 1)
         plt.figure(figsize=(12, 6))
 
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
         for i in range(num_img):
             plt.subplot(2, 5, i + 1)
-            img = x_sample[i].permute(1,2,0)
-            img=img/255.0
+
+            img = images[i].cpu()  # 移到 CPU（如果数据在 GPU）
+            img = img * std + mean  # 反归一化
+            img = img.clamp(0, 1)
+            img = img.permute(1,2,0).numpy()
             plt.imshow(img)
-            plt.title(f"True:{classes[t_sample[i].item()]}\npredicted:{classes[predicted[i].item()]}")
+            plt.title(f"True:{classes[labels[i].item()]}\npredicted:{classes[predicted[i].item()]}")
             plt.axis('off')
 
         plt.show()
-visualize(model,x_test_c,t_test_c,num_img=10)
+visualize(model,test_loader,num_img=10)
