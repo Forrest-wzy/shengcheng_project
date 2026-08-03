@@ -9,6 +9,7 @@ import numpy
 transform_train = transforms.Compose([
     transforms.RandomHorizontalFlip(),
     transforms.RandomCrop(32, padding=4),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225])
@@ -60,11 +61,11 @@ class plusCNN(nn.Module):
         self.conv1=nn.Conv2d(3,32,kernel_size=3,padding=1)
         self.bn1=ResidualBlock(32,64,64,stride=1)
         self.bn2=ResidualBlock(64,128,128,stride=1)
-        self.bn3=ResidualBlock(128,256,256,stride=2)
+        self.bn3=ResidualBlock(128,128,128,stride=2)
         self.pool=nn.MaxPool2d(2)
         self.dropout1=nn.Dropout(0.5)
-        self.fc1=nn.Linear(256*4*4,256)
-        self.fc2=nn.Linear(256,10)
+        self.fc1=nn.Linear(128*4*4,128)
+        self.fc2=nn.Linear(128,10)
 
     def forward(self,x):
         x=self.pool(torch.relu(self.conv1(x)))
@@ -125,7 +126,7 @@ for epoch in range(20):
         scheduler.step()
         print(f"Test Accuracy:{test_acc:.4f}")
         test_accs.append(test_acc)
-
+    """"
         train_images, train_labels = next(iter(train_loader))
         train_images = train_images.to(device)
         train_labels = train_labels.to(device)
@@ -137,7 +138,7 @@ for epoch in range(20):
         train_accs.append(train_acc)
     torch.cuda.empty_cache()
     model.train()
-
+    """
     if test_acc>best_acc:
         best_acc=test_acc
         torch.save(model.state_dict(), 'best_model_cifar10.pth')
@@ -149,10 +150,15 @@ plt.ylabel('Loss')
 plt.title('Train Loss')
 plt.show()
 plt.plot(test_accs,label='Test Accuracy')
-plt.plot(train_accs,label='Train Accuracy')
+#plt.plot(train_accs,label='Train Accuracy')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.show()
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+print(f"参数量: {count_parameters(model):,}")
 
 classes=('airplane','automobile','bird','cat','deer','dog','frog','horse','ship','truck')
 def visualize(model, test_loader, num_img=10):
