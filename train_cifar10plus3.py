@@ -77,19 +77,24 @@ class plusCNN(nn.Module):
         x=self.fc2(x)
         return x
 
-model=plusCNN()
+device=torch.device('cuda'if torch.cuda.is_available()else'cpu')
+print(f"Using device:{device}")
+
+model=plusCNN().to(device)
 criterions=nn.CrossEntropyLoss()
-optimizers=torch.optim.Adam(model.parameters(),lr=0.001,weight_decay=5e-4)
+optimizers=torch.optim.SGD(model.parameters(),lr=0.01,momentum=0.9,weight_decay=5e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizers, T_max=20)
 
 #训练
+best_acc=0
 train_losses=[]
 train_accs=[]
 test_accs=[]
-epochs=10
-for epoch in range(10):
+epochs=20
+for epoch in range(20):
     total_losses=0
     for images,labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
         y=model(images)
         loss=criterions(y,labels)
 
@@ -106,9 +111,12 @@ for epoch in range(10):
 #评估
     model.eval()
     total=0
+    total_train=0
     acc=0
+    acc_train=0
     with torch.no_grad():
         for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
             y_test = model(images)
             _,pred=torch.max(y_test,1)
             total+=labels.size(0)
@@ -119,11 +127,21 @@ for epoch in range(10):
         test_accs.append(test_acc)
 
         train_images, train_labels = next(iter(train_loader))
+        train_images = train_images.to(device)
+        train_labels = train_labels.to(device)
         train_pred = model(train_images)
-        train_acc = (train_pred.argmax(1) == train_labels).float().mean().item()
+        total_train+=train_labels.size(0)
+        acc_train = (train_pred.argmax(1) == train_labels).sum().item()
+        train_acc=acc_train/total_train
         print(f"Train Accuracy:{train_acc:.4f}")
         train_accs.append(train_acc)
+    torch.cuda.empty_cache()
     model.train()
+
+    if test_acc>best_acc:
+        best_acc=test_acc
+        torch.save(model.state_dict(), 'best_model_cifar10.pth')
+        print(f"Epoch {epoch+1}: 新最佳模型已保存 (Acc: {best_acc:.4f})")
 
 plt.plot(train_losses)
 plt.xlabel('Epoch')
@@ -141,8 +159,10 @@ def visualize(model, test_loader, num_img=10):
     model.eval()
     with torch.no_grad():
         images, labels = next(iter(test_loader))  # 取第一批
-        images = images[:num_img]
-        labels = labels[:num_img]
+        images,labels=images.to(device),labels.to(device)
+        indices = torch.randperm(images.size(0))[:num_img]
+        images = images[indices]
+        labels = labels[indices]
         y_pred = model(images)
         _, predicted = torch.max(y_pred, 1)
         plt.figure(figsize=(12, 6))
