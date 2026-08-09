@@ -10,33 +10,33 @@ import torchvision
 import os
 import torch.optim as optim
 
-
-#读取数据
+# 读取数据
 transform_train = transforms.Compose([
     transforms.RandomHorizontalFlip(),
-    #transforms.RandomCrop(32, padding=4),
-    #transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    # transforms.RandomCrop(32, padding=4),
+    # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.5,0.5,0.5],
-                         std=[0.5,0.5,0.5])
+    transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                         std=[0.5, 0.5, 0.5])
 ])
 
 train_dataset = CIFAR10(root='D:\\PythonProject2', train=False, download=False, transform=transform_train)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False, num_workers=0)
 
 os.makedirs('real_images', exist_ok=True)
-count=0
+count = 0
 for i, (images, _) in enumerate(train_loader):
     for j in range(images.size(0)):
         img = images[j] * 0.5 + 0.5  # 反归一化到 [0,1]
         img = torchvision.transforms.ToPILImage()(img)
         img.save(f'real_images/{count:05d}.png')
-        count+=1
+        count += 1
 
-device=torch.device('cuda'if torch.cuda.is_available()else'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device:{device}")
 
-#搭建GAN生成对抗网络
+
+# 搭建GAN生成对抗网络
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -44,6 +44,7 @@ def weights_init(m):
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
+
 
 class SEBlock(nn.Module):
     def __init__(self, channel, reduction=16):
@@ -65,11 +66,13 @@ class SEBlock(nn.Module):
         # Scale操作：将权重应用到特征图
         return x * y.expand_as(x)
 
+
 class ResidualBlock(nn.Module):
-    expansion=1
-    def __init__(self, in_channels, out_channels, stride=1,reduction=16):
+    expansion = 1
+
+    def __init__(self, in_channels, out_channels, stride=1, reduction=16):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1,bias=False)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, 3, 1, 1)
@@ -80,8 +83,8 @@ class ResidualBlock(nn.Module):
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
             self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, 1, stride=stride,bias=False),
-                nn.BatchNorm2d(self.expansion*out_channels)
+                nn.Conv2d(in_channels, out_channels, 1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * out_channels)
             )
 
     def forward(self, x):
@@ -91,26 +94,29 @@ class ResidualBlock(nn.Module):
         y = self.relu(y)
         y = self.conv2(y)
         y = self.bn2(y)
-        y=self.se(y)
+        y = self.se(y)
         y += identity  # 残差连接
         y = self.relu(y)
         return y
 
-#可视化
-def visualize_results(generator,num_samples=16,nz=100,device='cuda',save_dir='fake_images'):
+
+# 可视化
+def visualize_results(generator, num_samples=16, nz=100, device='cuda', save_dir='fake_images'):#####!!!!!
     generator.eval()
     with torch.no_grad():
-        noise=torch.randn(num_samples,nz).to(device)
-        fake_images=generator(noise)
-        fake_images=fake_images*0.5+0.5
-        plt.figure(figsize=(8,8))
+        noise = torch.randn(num_samples, nz).to(device)
+        fake_images = generator(noise)
+        fake_images = fake_images * 0.5 + 0.5
+        plt.figure(figsize=(8, 8))
         for i in range(num_samples):
-            plt.subplot(4,4,i+1)
-            img=fake_images[i].cpu().permute(1,2,0).numpy()
+            plt.subplot(4, 4, i + 1)
+            img = fake_images[i].cpu().permute(1, 2, 0).numpy()
             plt.imshow(img)
             plt.axis('off')
         plt.show()
     generator.train()
+
+
 """""
 #生成器
 class Generator(nn.Module):
@@ -143,11 +149,13 @@ class Generator(nn.Module):
         x = self.res_blocks(x)
         x = self.deconv(x)
         return x
-        
+
 """
+
+
 class Generator(nn.Module):
-    def __init__(self, nz=100, ngf=64, nc=3):
-        super(Generator,self).__init__()
+    def __init__(self, nz=100, ngf=64, nc=3):####!!!!
+        super(Generator, self).__init__()
         self.main = nn.Sequential(
             # 输入: 100 维噪声
             nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
@@ -167,91 +175,95 @@ class Generator(nn.Module):
         )
 
     def forward(self, z):
-        z = z.view(z.size(0),z.size(1), 1, 1)  # 把噪声变成 4D 张量
-        out=self.main(z)
-        #print(f"deconv 输出形状: {out.shape}")
+        z = z.view(z.size(0), z.size(1), 1, 1)  # 把噪声变成 4D 张量
+        out = self.main(z)
+        # print(f"deconv 输出形状: {out.shape}")
         return out
 
-#判别器
+
+# 判别器
 class Discriminator(nn.Module):
-    def __init__(self,nc=3,ndf=64):
-        super(Discriminator,self).__init__()
-        self.main=nn.Sequential(
-            nn.Conv2d(nc,ndf,4,2,1),
-            nn.LeakyReLU(0.2,inplace=True),
-            nn.Conv2d(ndf,ndf*2,4,2,1),
-            nn.BatchNorm2d(ndf*2),
-            nn.LeakyReLU(0.2,inplace=True),
-            nn.Conv2d(ndf*2,ndf*4,4,2,1),
-            nn.BatchNorm2d(ndf*4),
-            nn.LeakyReLU(0.2,inplace=True),
-            nn.Conv2d(ndf*4,1,4,1,0),
+    def __init__(self, nc=3, ndf=64):
+        super(Discriminator, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(nc, ndf, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1),
+            nn.BatchNorm2d(ndf * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1),
+            nn.BatchNorm2d(ndf * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        self.classifier=nn.Sequential(
+            nn.Conv2d(ndf * 4, 1, 4, 1, 0),
             nn.Dropout(0.3),
             nn.Sigmoid()
         )
 
-    def forward(self,x):
-        x=self.main(x)
-        #x = nn.AdaptiveAvgPool2d(1)(x)
-        return x.view(-1,1)
+    def forward(self, x,return_features=False):
+        features= self.features(x)
+        if return_features:
+            return features
+        # x = nn.AdaptiveAvgPool2d(1)(x)
+        return self.classifier(features).view(-1,1)
 
-nz=100
-generator=Generator().to(device)
-discriminator=Discriminator().to(device)
+
+nz = 100######!!!!!
+generator = Generator().to(device)
+discriminator = Discriminator().to(device)
 generator.apply(weights_init)
 discriminator.apply(weights_init)
 
 print("Generator parameters:", sum(p.numel() for p in generator.parameters()))
 print("Discriminator parameters:", sum(p.numel() for p in discriminator.parameters()))
-optimizer_G=torch.optim.Adam(generator.parameters(),lr=0.0002,betas=(0.5,0.999))
-optimizer_D=torch.optim.Adam(discriminator.parameters(),lr=0.0005,betas=(0.5,0.999))
+optimizer_G = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=0.0005, betas=(0.5, 0.999))
 # WGAN 建议使用 RMSprop 或 SGD，不要用 Adam（Adam 在 WGAN 中可能不稳定）
-#optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=0.0001)
-#optimizer_G = torch.optim.RMSprop(generator.parameters(), lr=0.0001)
-criterion=nn.BCELoss()
+# optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=0.0001)
+# optimizer_G = torch.optim.RMSprop(generator.parameters(), lr=0.0001)
+criterion = nn.BCELoss()
 
-#训练
-epochs=200
-d_losses=[]
-g_losses=[]
-for epoch in range(200):
+# 训练
+epochs = 100
+d_losses = []
+g_losses = []
+for epoch in range(100):
     for images, _ in train_loader:
-        bs=images.size(0)
-        real_images=images.to(device)
+        bs = images.size(0)
+        real_images = images.to(device)
 
-        #训练判别器
+        # 训练判别器
 
-        #判别器看真实图
-        real_output=discriminator(real_images)
-        real_labels = torch.ones_like(real_output).to(device)*0.9
-        loss_real=criterion(real_output,real_labels)
-        #loss_real=
+        # 判别器看真实图
+        real_output = discriminator(real_images)
+        real_labels = torch.ones_like(real_output).to(device) * 0.9
+        loss_real = criterion(real_output, real_labels)
 
-        #判别器看假图
-        noise=torch.randn(bs, nz).to(device)
+        # 判别器看假图
+        noise = torch.randn(bs, nz).to(device)
         fake_images = generator(noise)
-        fake_output=discriminator(fake_images.detach())
-        fake_labels = torch.zeros_like(fake_output).to(device)+0.1
-        loss_fake=criterion(fake_output,fake_labels)
-        #fake_loss_D = discriminator(generator(torch.randn(bs, 100).to(device)).detach())
+        fake_output = discriminator(fake_images.detach())
+        fake_labels = torch.zeros_like(fake_output).to(device) + 0.1
+        loss_fake = criterion(fake_output, fake_labels)
 
-        d_loss=loss_real+loss_fake
-        #d_loss = -torch.mean(real_output) + torch.mean(fake_loss_D)
+        d_loss = loss_real + loss_fake
         optimizer_D.zero_grad()
         d_loss.backward()
         optimizer_D.step()
 
-        # 权重裁剪（WGAN 的关键！）
-        #for p in discriminator.parameters():
-        #    p.data.clamp_(-0.05, 0.05)
+        # 训练生成器
+        real_features = discriminator(real_images, return_features=True)
+        noise = torch.randn(bs, nz).to(device)
+        fake_images = generator(noise)
+        fake_output = discriminator(fake_images)
+        fake_features = discriminator(fake_images, return_features=True)
+        #g_loss = criterion(fake_output, real_labels)
+        g_loss_adv = criterion(fake_output, real_labels)
+        g_loss_fm=torch.mean(torch.abs(real_features.mean(0)-fake_features.mean(0)))
+        lambda_fm=10
+        g_loss=g_loss_adv+lambda_fm*g_loss_fm
 
-        #训练生成器
-        noise=torch.randn(bs,nz).to(device)
-        fake_images=generator(noise)
-        fake_output=discriminator(fake_images)
-        g_loss=criterion(fake_output,real_labels)
-        # WGAN 损失：最大化 判别器对假图的输出
-        #g_loss = -torch.mean(fake_output)
 
         optimizer_G.zero_grad()
         g_loss.backward()
@@ -262,9 +274,11 @@ for epoch in range(200):
 
         if (epoch + 1) % 5 == 0:
             print(f"Epoch {epoch + 1:4d} | D_loss: {d_loss:.4f} | G_loss: {g_loss:.4f}")
+        if (epoch + 1) % 10== 0:
             visualize_results(generator, num_samples=16, nz=nz, device=device)
 
-def generate_fake_images(generator, num_images=10000, batch_size=64, nz=100, device='cuda', save_dir='fake_images'):
+
+def generate_fake_images(generator, num_images=10000, batch_size=64, nz=100, device='cuda', save_dir='fake_images'):######!!!!!
     os.makedirs(save_dir, exist_ok=True)
     generator.eval()
     count = 0
@@ -280,5 +294,6 @@ def generate_fake_images(generator, num_images=10000, batch_size=64, nz=100, dev
                 count += 1
     print(f"已生成 {count} 张假图片到 {save_dir}/")
     generator.train()
+
 
 generate_fake_images(generator, num_images=10000, batch_size=64, device=device)
