@@ -153,6 +153,25 @@ class Generator(nn.Module):
 """
 
 
+class MinibatchDiscrimination(nn.Module):
+    def __init__(self, in_features, out_features=100, kernel_dim=50):
+        super().__init__()
+        self.T = nn.Parameter(torch.randn(in_features, out_features, kernel_dim))
+
+    def forward(self, x):
+        # x: [batch, in_features]
+        # M = x @ T: [batch, out_features, kernel_dim]
+        M = torch.matmul(x, self.T.view(x.size(1), -1))  # [batch, out_features * kernel_dim]
+        M = M.view(-1, self.T.size(1), self.T.size(2))  # [batch, out_features, kernel_dim]
+
+        # 计算 batch 内两两之间的 L1 距离
+        M_expanded = M.unsqueeze(0)  # [1, batch, out_features, kernel_dim]
+        M_transposed = M.unsqueeze(1)  # [batch, 1, out_features, kernel_dim]
+        diff = torch.abs(M_expanded - M_transposed)
+        similarity = torch.exp(-torch.sum(diff, dim=3))  # [batch, batch, out_features]
+        similarity = torch.sum(similarity, dim=1)  # [batch, out_features]
+        return torch.cat([x, similarity], dim=1)
+
 class Generator(nn.Module):
     def __init__(self, nz=100, ngf=64, nc=3):####!!!!
         super(Generator, self).__init__()
@@ -195,18 +214,28 @@ class Discriminator(nn.Module):
             nn.BatchNorm2d(ndf * 4),
             nn.LeakyReLU(0.2, inplace=True),
         )
+        """""
         self.classifier=nn.Sequential(
             nn.Conv2d(ndf * 4, 1, 4, 1, 0),
             nn.Dropout(0.3),
             nn.Sigmoid()
         )
+        """
+        self.fc = nn.Linear(ndf * 4 * 4 * 4, 128)  # 根据你的特征图尺寸调整
+        self.minibatch = MinibatchDiscrimination(128, out_features=100, kernel_dim=50)
+        self.final = nn.Linear(128 + 100, 1)  # 128 原始特征 + 100 小批量特征
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x,return_features=False):
         features= self.features(x)
+        features=features.view(features.size(0),-1)
         if return_features:
             return features
+        fc_out=self.fc(features)
+        minibatch_out=self.minibatch(fc_out)
+        out=self.final(minibatch_out)
         # x = nn.AdaptiveAvgPool2d(1)(x)
-        return self.classifier(features).view(-1,1)
+        return self.sigmoid(out).view(-1,1)
 
 
 nz = 100######!!!!!
@@ -218,17 +247,17 @@ discriminator.apply(weights_init)
 print("Generator parameters:", sum(p.numel() for p in generator.parameters()))
 print("Discriminator parameters:", sum(p.numel() for p in discriminator.parameters()))
 optimizer_G = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=0.0005, betas=(0.5, 0.999))
+optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
 # WGAN 建议使用 RMSprop 或 SGD，不要用 Adam（Adam 在 WGAN 中可能不稳定）
 # optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=0.0001)
 # optimizer_G = torch.optim.RMSprop(generator.parameters(), lr=0.0001)
 criterion = nn.BCELoss()
 
 # 训练
-epochs = 100
+epochs = 200
 d_losses = []
 g_losses = []
-for epoch in range(100):
+for epoch in range(200):
     for images, _ in train_loader:
         bs = images.size(0)
         real_images = images.to(device)
@@ -297,3 +326,7 @@ def generate_fake_images(generator, num_images=10000, batch_size=64, nz=100, dev
 
 
 generate_fake_images(generator, num_images=10000, batch_size=64, device=device)
+
+# 训练结束后
+torch.save(generator.state_dict(), 'generator_54.84.pth')
+print("模型已保存为 generator_54.84.pth")
