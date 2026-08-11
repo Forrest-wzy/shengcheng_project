@@ -13,7 +13,7 @@ import torch.optim as optim
 # 读取数据
 transform_train = transforms.Compose([
     transforms.RandomHorizontalFlip(),
-    # transforms.RandomCrop(32, padding=4),
+    #transforms.RandomCrop(32, padding=4),
     # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5, 0.5, 0.5],
@@ -116,13 +116,12 @@ def visualize_results(generator, num_samples=16, nz=100, device='cuda', save_dir
         plt.show()
     generator.train()
 
-
 """""
 #生成器
 class Generator(nn.Module):
-    def __init__(self,nz=128,ngf=64,nc=3):
+    def __init__(self,nz=100,ngf=64,nc=3):###!!!
         super().__init__()
-        self.fc=nn.Linear(nz,256*4*4)
+        self.fc=nn.Linear(nz,ngf*4*4*4)
         self.res_blocks=nn.Sequential(
             ResidualBlock(ngf*4,ngf*4),
             ResidualBlock(ngf*4,ngf*4),
@@ -130,22 +129,22 @@ class Generator(nn.Module):
         )
 
         self.deconv=nn.Sequential(
+            #nn.ConvTranspose2d(ngf*8,ngf*4,4,2,1),
+            #nn.BatchNorm2d(ngf*4),
+            #nn.ReLU(),
             nn.ConvTranspose2d(ngf*4,ngf*2,4,2,1),
             nn.BatchNorm2d(ngf*2),
             nn.ReLU(),
-            nn.ConvTranspose2d(ngf*2,ngf,4,2,1),
+            nn.ConvTranspose2d(ngf*2,ngf, 4, 2, 1),
             nn.BatchNorm2d(ngf),
             nn.ReLU(),
-            nn.ConvTranspose2d(ngf,ngf*0.5, 4, 2, 1),
-            nn.BatchNorm2d(ngf*0.5),
-            nn.ReLU(),
-            nn.ConvTranspose2d(ngf*0.5,nc,4,2,1),
+            nn.ConvTranspose2d(ngf,nc,4,2,1),
             nn.Tanh()
         )
 
     def forward(self, z):
         x = self.fc(z)
-        x = x.view(-1,256, 4, 4)
+        x = x.view(-1,64*4, 4, 4)
         x = self.res_blocks(x)
         x = self.deconv(x)
         return x
@@ -214,7 +213,7 @@ class Discriminator(nn.Module):
             nn.BatchNorm2d(ndf * 4),
             nn.LeakyReLU(0.2, inplace=True),
         )
-        """""
+
         self.classifier=nn.Sequential(
             nn.Conv2d(ndf * 4, 1, 4, 1, 0),
             nn.Dropout(0.3),
@@ -225,17 +224,18 @@ class Discriminator(nn.Module):
         self.minibatch = MinibatchDiscrimination(128, out_features=100, kernel_dim=50)
         self.final = nn.Linear(128 + 100, 1)  # 128 原始特征 + 100 小批量特征
         self.sigmoid = nn.Sigmoid()
-
+        """
     def forward(self, x,return_features=False):
-        features= self.features(x)
-        features=features.view(features.size(0),-1)
-        if return_features:
-            return features
-        fc_out=self.fc(features)
-        minibatch_out=self.minibatch(fc_out)
-        out=self.final(minibatch_out)
-        # x = nn.AdaptiveAvgPool2d(1)(x)
-        return self.sigmoid(out).view(-1,1)
+        #features= self.features(x)
+        #features=features.view(features.size(0),-1)
+        #if return_features:
+        #    return features
+        #fc_out=self.fc(features)
+        #minibatch_out=self.minibatch(fc_out)
+        #out=self.final(minibatch_out)
+        x=self.features(x)
+        x=self.classifier(x)
+        return x.view(-1,1)
 
 
 nz = 100######!!!!!
@@ -246,7 +246,7 @@ discriminator.apply(weights_init)
 
 print("Generator parameters:", sum(p.numel() for p in generator.parameters()))
 print("Discriminator parameters:", sum(p.numel() for p in discriminator.parameters()))
-optimizer_G = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+optimizer_G = torch.optim.Adam(generator.parameters(), lr=0.0004, betas=(0.5, 0.999))
 optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
 # WGAN 建议使用 RMSprop 或 SGD，不要用 Adam（Adam 在 WGAN 中可能不稳定）
 # optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=0.0001)
@@ -277,22 +277,25 @@ for epoch in range(200):
         loss_fake = criterion(fake_output, fake_labels)
 
         d_loss = loss_real + loss_fake
+        #d_loss = torch.mean(torch.relu(1 - real_output)) + torch.mean(torch.relu(1 + fake_output))
         optimizer_D.zero_grad()
         d_loss.backward()
         optimizer_D.step()
 
         # 训练生成器
-        real_features = discriminator(real_images, return_features=True)
+        #real_features = discriminator(real_images, return_features=True)
         noise = torch.randn(bs, nz).to(device)
         fake_images = generator(noise)
         fake_output = discriminator(fake_images)
-        fake_features = discriminator(fake_images, return_features=True)
-        #g_loss = criterion(fake_output, real_labels)
+        #fake_features = discriminator(fake_images, return_features=True)
+        g_loss = criterion(fake_output, real_labels)
+        #g_loss = -torch.mean(fake_output)
+        """""
         g_loss_adv = criterion(fake_output, real_labels)
         g_loss_fm=torch.mean(torch.abs(real_features.mean(0)-fake_features.mean(0)))
         lambda_fm=10
         g_loss=g_loss_adv+lambda_fm*g_loss_fm
-
+        """
 
         optimizer_G.zero_grad()
         g_loss.backward()
@@ -328,5 +331,4 @@ def generate_fake_images(generator, num_images=10000, batch_size=64, nz=100, dev
 generate_fake_images(generator, num_images=10000, batch_size=64, device=device)
 
 # 训练结束后
-torch.save(generator.state_dict(), 'generator_54.84.pth')
-print("模型已保存为 generator_54.84.pth")
+print("模型已保存为 generator.pth")
