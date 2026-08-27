@@ -12,7 +12,7 @@ def main():
     #读取数据
     transforms_train=transforms.Compose([
         transforms.Resize((128,128)),
-        transforms.RandomHorizontalFlip(p=0.5),
+        #transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5,0.5,0.5],std=[0.5,0.5,0.5])
     ])
@@ -76,7 +76,7 @@ def main():
             return self.conv(x)
 
     class UNet(nn.Module):
-        def __init__(self,in_channels=3,out_channels=3,features=[32,64,128,256]):
+        def __init__(self,in_channels=3,out_channels=3,features=[64,128,256,512]):
             super().__init__()
             self.inc=Unetblock(in_channels,features[0],use_dropout=False)
             self.down1=Down(features[0],features[1],use_dropout=False)
@@ -103,10 +103,8 @@ def main():
             x= self.outc(x)
             return torch.tanh(x)
 
-    generator=UNet(in_channels=3,out_channels=3,features=[32,64,128,256]).to(device)
-    #generator.load_state_dict(torch.load('pix2pix_generator1.pth'))
-    #generator.load_state_dict(torch.load('pix2pix_generator.pth'))
-    print("成功加载生成器权重，准备继续训练！")
+    generator=UNet(in_channels=3,out_channels=3,features=[64,128,256,512]).to(device)
+    #generator.load_state_dict(torch.load('pix2pix_generator1_epoch_80.pth'))
 
     class Patchblock(nn.Module):
         def __init__(self,in_ch,out_ch):
@@ -120,7 +118,7 @@ def main():
             return self.patchblock(x)
 
     class PatchGan(nn.Module):
-        def __init__(self,in_ch=3,ndf=32,out_ch=1):
+        def __init__(self,in_ch=3,ndf=64,out_ch=1):
             super().__init__()
             self.inc=nn.Conv2d(in_ch*2,ndf,kernel_size=4,stride=2,padding=1)
             self.con1=Patchblock(ndf,ndf*2)
@@ -131,78 +129,89 @@ def main():
             x=self.con1(x)
             x=self.con2(x)
             return self.con3(x)
-    discriminator=PatchGan(in_ch=3,ndf=32,out_ch=1).to(device)
-
+    discriminator=PatchGan(in_ch=3,ndf=64,out_ch=1).to(device)
+    #discriminator.load_state_dict(torch.load('pix2pix_discriminator1_epoch_40.pth'))
     #损失函数
     criterion_gan=nn.BCEWithLogitsLoss()
     criterion_L1=nn.L1Loss()# L1 损失，让生成图像更接近真实图像
 
     class VGGPerceptualLoss(nn.Module):
-        """VGG-19 特征层感知损失，冻结参数，只计算特征图的L1距离"""
-
         def __init__(self, layer_ids=[2, 7, 12, 21, 30]):
             super().__init__()
             import torchvision.models as models
-            # 使用 weights 参数替代过时的 pretrained
             vgg = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1).features
-
-            # 关键修改：保留从第0层到最大layer_id的所有层
-            # 这样输入图片才能正确流过前面的卷积层
             self.layers = nn.ModuleList([vgg[i] for i in range(max(layer_ids) + 1)])
-            self.layer_ids = set(layer_ids)  # 转为集合，方便快速查找
-
-            # 冻结所有参数，VGG只用来提取特征，不参与训练
+            self.layer_ids = set(layer_ids)
             for p in self.layers.parameters():
                 p.requires_grad = False
 
+            # ImageNet 归一化参数
+            self.register_buffer('imagenet_mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+            self.register_buffer('imagenet_std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
         def forward(self, x, y):
+            # 1. [-1, 1] -> [0, 1]
+            x = (x + 1.0) / 2.0
+            y = (y + 1.0) / 2.0
+
+            # 2. 【核心修正】强制 Resize 到 224x224！
+            # 必须使用双线性插值，确保梯度能正常回传
+            x = torch.nn.functional.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+            y = torch.nn.functional.interpolate(y, size=(224, 224), mode='bilinear', align_corners=False)
+
+            # 3. ImageNet 标准化
+            x = (x - self.imagenet_mean) / self.imagenet_std
+            y = (y - self.imagenet_mean) / self.imagenet_std
+
             loss = 0.0
-            # 让图片流过所有需要的层
             for i, layer in enumerate(self.layers):
                 x = layer(x)
                 y = layer(y)
-                # 只在指定的层计算损失
                 if i in self.layer_ids:
                     loss += nn.functional.l1_loss(x, y)
             return loss
 
-    vgg_loss=VGGPerceptualLoss().to(device)
-    lambda_vgg=10
-
+    vgg_loss = VGGPerceptualLoss().to(device)
+    lambda_vgg = 20
     #优化器
-    optimizer_G=optim.Adam(generator.parameters(),lr=0.0002,betas=(0.5,0.999))
-    optimizer_D=optim.Adam(discriminator.parameters(),lr=0.0002,betas=(0.5,0.999))
+    optimizer_G=optim.Adam(generator.parameters(),lr=0.00002,betas=(0.5,0.999))
+    optimizer_D=optim.Adam(discriminator.parameters(),lr=0.00005,betas=(0.5,0.999))
 
-    #from torch.optim.lr_scheduler import StepLR
-    lr_policy = 'linear'
+    start_epoch = 60
+    generator.load_state_dict(torch.load(f'pix2pix_generator1_epoch_{start_epoch}.pth', map_location=device))
+    discriminator.load_state_dict(torch.load(f'pix2pix_discriminator1_epoch_{start_epoch}.pth', map_location=device))
+    #print(f"成功加载 Epoch {start_epoch} 的 G 和 D 权重！")
+
+    generator.eval()  # 切到评估模式
+    test_line = next(iter(train_loader))[0][0:1].to(device)
+    with torch.no_grad():
+        test_fake = generator(test_line)
+        print(f"生成图片范围: {test_fake.min():.2f} ~ {test_fake.max():.2f}")
+    generator.train()  # 切回训练模式
+
     def lambda_rule(epoch):
-        # 前 50 轮保持 lr=0.0002，后 50 轮线性衰减到 0
-        lr_l = 1.0 - max(0, epoch - 80) / float(80)
-        return lr_l
+        # 微调模式：前 10 轮保持 100% 的学习率（让模型快速吸收困难样本）
+        # 10 轮之后，在接下来的 30 轮内线性衰减到 0（慢慢收敛，防止过拟合）
+        n_epochs_decay = 30
+        if epoch - start_epoch < 10:
+            return 1.0
+        else:
+            lr_l = 1.0 - max(0, epoch - start_epoch - 10) / float(n_epochs_decay)
+            return max(0.0, lr_l)
     #scheduler_G = StepLR(optimizer_G, step_size=80, gamma=0.2)
     #scheduler_D = StepLR(optimizer_D, step_size=80, gamma=0.2)
     scheduler_G = torch.optim.lr_scheduler.LambdaLR(optimizer_G, lr_lambda=lambda_rule)
     scheduler_D = torch.optim.lr_scheduler.LambdaLR(optimizer_D, lr_lambda=lambda_rule)
 
-    #generator.load_state_dict(torch.load('pix2pix_generator2_epoch_{epoch}.pth'))
-    #discriminator.load_state_dict(torch.load('pix2pix_discriminator2_epoch_{epoch}.pth'))
-
-
-    test_line = next(iter(train_loader))[0][0:1].to(device)
-    with torch.no_grad():
-        test_fake = generator(test_line)
-        print(f"生成图片范围: {test_fake.min():.2f} ~ {test_fake.max():.2f}")
-
-
     #训练
     import torch
     torch.cuda.empty_cache()
-    epochs=200
+    epochs=100
     lambda_L1=100# L1 损失的权重
     lambda_gp = 10  # [修复9] 梯度惩罚权重，稳定判别器训练
-    for epoch in range(epochs):
-
-
+    imagenet_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+    imagenet_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
+    for epoch in range(start_epoch+1,epochs+1):
         for i,(line,photo) in enumerate(train_loader):
             batch_size=line.size(0)
             line=line.to(device)
@@ -237,39 +246,36 @@ def main():
             optimizer_D.step()
 
             #训练G
-            #for _ in range(2):
+            # ================= 训练 G =================
             optimizer_G.zero_grad()
-            fake_photo=generator(line)
-            fake_pairs=torch.cat([line,fake_photo],dim=1)
-            fake_pred=discriminator(fake_pairs)
-            loss_G_Gan=criterion_gan(fake_pred,torch.ones_like(fake_pred))
-            loss_G_L1=criterion_L1(fake_photo,photo)
-            #loss_G=loss_G_Gan+lambda_L1*loss_G_L1
+            fake_photo = generator(line)
 
-            fake_photo_normalized = (fake_photo + 1.0) / 2.0
-            photo_normalized = (photo + 1.0) / 2.0
-            loss_G_VGG = vgg_loss(fake_photo_normalized, photo_normalized)
-            loss_G = loss_G_Gan+ lambda_L1 * loss_G_L1 + lambda_vgg * loss_G_VGG
+            # GAN Loss
+            fake_pairs = torch.cat([line, fake_photo], dim=1)
+            fake_pred = discriminator(fake_pairs)
+            loss_G_Gan = criterion_gan(fake_pred, torch.ones_like(fake_pred))
 
+            # L1 Loss
+            loss_G_L1 = criterion_L1(fake_photo, photo)
+
+            # VGG Loss 【关键修改】直接传原始的 [-1, 1] 数据进去，类内部会自动处理
+            loss_G_VGG = vgg_loss(fake_photo, photo)
+
+            # 总 Loss
+            loss_G = loss_G_Gan + lambda_L1 * loss_G_L1 + lambda_vgg * loss_G_VGG
 
             loss_G.backward()
             torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=1.0)
             optimizer_G.step()
 
+
         scheduler_G.step()
         scheduler_D.step()
-        if epoch % 10==0:
+        if epoch % 5==0:
             print(f"Epoch {epoch}: D_loss: {loss_D.item():.4f}, G_loss: {loss_G.item():.4f}")
-            print('stop')
-
-
+            print(f"生成图片范围: {fake_photo.min().item():.4f} ~ {fake_photo.max().item():.4f}")
             torch.save(generator.state_dict(), f'pix2pix_generator1_epoch_{epoch}.pth')
             torch.save(discriminator.state_dict(), f'pix2pix_discriminator1_epoch_{epoch}.pth')
-        #if epoch < 50:
-         #   print(f"Epoch {epoch}: 预热阶段, G_loss: {loss_G.item():.4f}")
-        #else:
-         #   print(f"Epoch {epoch}: D_loss: {loss_D.item():.4f}, G_loss: {loss_G.item():.4f}")
-        # 👇 关键修改：在每一个 Epoch 结束后，自动保存权重
 
             generator.eval()  # 切换到评估模式
             os.makedirs('generated_p2p1', exist_ok=True)
@@ -326,22 +332,30 @@ def main():
         fig, axes = plt.subplots(actual_samples, 3, figsize=(9, 3 * actual_samples), squeeze=False)
 
         for i in range(actual_samples):
-            # 1. 显示线条画 (输入)
-            # 使用 squeeze=False 后，axes 始终是二维数组，访问方式统一为 axes[i, j]
-            axes[i, 0].imshow(line[i].cpu().permute(1, 2, 0) * 0.5 + 0.5)
+            # --- 修正点 1：处理输入线稿 (Input) ---
+            input_img = line[i].cpu().permute(1, 2, 0) * 0.5 + 0.5
+            # 如果是单通道 [H, W, 1]，必须 squeeze 掉最后一个维度变成 [H, W]
+            # 或者使用 cmap='gray'
+            if input_img.shape[2] == 1:
+                axes[i, 0].imshow(input_img.squeeze(), cmap='gray')
+            else:
+                axes[i, 0].imshow(input_img)
             axes[i, 0].set_title('Input (Line)')
             axes[i, 0].axis('off')
 
-            # 2. 显示生成图 (输出)
-            axes[i, 1].imshow(fake_photo[i].cpu().permute(1, 2, 0) * 0.5 + 0.5)
+            # --- 修正点 2：处理生成图 (Generated) ---
+            fake_img = fake_photo[i].cpu().permute(1, 2, 0) * 0.5 + 0.5
+            # 防止数值溢出导致颜色诡异，必须 clamp
+            fake_img = torch.clamp(fake_img, 0, 1)
+            axes[i, 1].imshow(fake_img)
             axes[i, 1].set_title('Generated')
             axes[i, 1].axis('off')
 
-            # 3. 显示真实图 (目标)
-            axes[i, 2].imshow(photo[i].cpu().permute(1, 2, 0) * 0.5 + 0.5)
+            # --- 修正点 3：处理真实图 (Real) ---
+            real_img = photo[i].cpu().permute(1, 2, 0) * 0.5 + 0.5
+            axes[i, 2].imshow(real_img)
             axes[i, 2].set_title('Real')
             axes[i, 2].axis('off')
-
         plt.tight_layout()
         plt.savefig('result.png')
         plt.show()
